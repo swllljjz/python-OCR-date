@@ -1,0 +1,178 @@
+# CPU优化配置文件
+# 专门针对无GPU环境的优化配置
+
+# 应用程序基本信息
+app:
+  name: "商品包装生产日期识别系统"
+  version: "1.0.0"
+  description: "基于OCR技术的智能日期识别系统 - CPU优化版"
+
+# OCR引擎配置 - CPU优化
+ocr:
+  # 引擎类型
+  engine: "paddleocr"
+  
+  # 语言设置
+  language: "ch"
+  
+  # GPU设置 - 强制使用CPU
+  use_gpu: false
+  gpu_mem: 0
+  
+  # CPU优化参数
+  cpu_threads: 4              # CPU线程数，建议设置为CPU核心数
+  
+  # 识别参数 - 针对CPU优化
+  confidence_threshold: 0.75   # 稍微降低置信度阈值以提高召回率
+  use_angle_cls: true         # 保持文本方向检测
+  det_limit_side_len: 640     # 降低检测分辨率以提高速度
+  det_limit_type: "max"       # 使用最大限制
+  
+  # 检测模型参数
+  det_db_thresh: 0.3          # 检测阈值
+  det_db_box_thresh: 0.5      # 框检测阈值
+  det_db_unclip_ratio: 1.6    # 检测框扩展比例
+  
+  # 识别模型参数
+  rec_batch_num: 6            # 批处理大小，CPU环境建议较小值
+  max_text_length: 25         # 最大文本长度
+  
+  # 分类模型参数
+  cls_batch_num: 6            # 分类批处理大小
+  cls_thresh: 0.9             # 分类阈值
+
+# 图像处理配置 - CPU优化
+image_processing:
+  # 支持的图像格式
+  supported_formats: [".jpg", ".jpeg", ".png", ".bmp", ".tiff", ".webp"]
+  
+  # 图像预处理 - CPU优化
+  max_image_size: [1024, 1024]  # 限制最大图像尺寸
+  auto_resize: true              # 自动调整大小
+  resize_quality: "medium"       # 调整质量：low, medium, high
+  
+  # 图像增强
+  enable_enhancement: true
+  brightness_adjustment: 0.1
+  contrast_adjustment: 0.1
+  
+  # 噪声处理
+  enable_denoising: false       # CPU环境下关闭复杂的降噪
+  denoise_strength: 0.3
+
+# 日期解析配置
+date_parsing:
+  # 支持的日期格式
+  patterns:
+    - "YYYY.MM.DD"
+    - "YYYY-MM-DD"
+    - "YYYY/MM/DD"
+    - "YYYY年MM月DD日"
+    - "YYYYMMDD"
+    - "YY.MM.DD"
+    - "YY-MM-DD"
+    - "YY/MM/DD"
+  
+  # 解析参数
+  strict_mode: false
+  allow_partial_dates: true
+  date_range_validation: true
+  min_year: 2000
+  max_year: 2030
+
+# 性能配置 - CPU优化
+performance:
+  # 并发处理
+  max_workers: 2              # CPU环境下减少并发数
+  batch_size: 5               # 减小批处理大小
+  
+  # 超时设置
+  single_image_timeout: 45    # 增加单张图片超时时间
+  batch_timeout: 600          # 增加批处理超时时间
+  
+  # 内存管理
+  max_memory_usage: 1024      # 限制最大内存使用(MB)
+  enable_memory_optimization: true
+  
+  # 缓存配置
+  cache_enabled: true
+  cache_size: 500             # 减小缓存大小
+  cache_ttl: 3600            # 缓存生存时间(秒)
+
+# GUI配置
+gui:
+  window_title: "商品包装日期识别系统 V1.0 - CPU优化版"
+  window_size: [1200, 800]
+  resizable: true
+  
+  # 主题设置
+  theme: "default"
+  
+  # 进度显示
+  show_progress: true
+  progress_update_interval: 0.5
+
+# 日志配置
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # 文件日志
+  file_logging: true
+  log_file: "logs/app_cpu.log"
+  max_file_size: "10MB"
+  backup_count: 5
+  
+  # 控制台日志
+  console_logging: true
+  console_level: "INFO"
+
+# 输出配置
+output:
+  # 默认输出格式
+  default_format: "json"
+  
+  # 支持的输出格式
+  supported_formats: ["json", "csv", "txt", "xlsx"]
+  
+  # 输出选项
+  include_confidence: true
+  include_coordinates: false    # CPU环境下关闭坐标输出
+  include_raw_text: true
+  include_processing_time: true
+
+# CPU性能优化建议
+cpu_optimization:
+  # 系统要求
+  minimum_requirements:
+    cpu_cores: 2
+    memory_gb: 4
+    python_version: "3.8+"
+  
+  # 推荐配置
+  recommended_requirements:
+    cpu_cores: 4
+    memory_gb: 8
+    python_version: "3.10+"
+  
+  # 优化建议
+  optimization_tips:
+    - "使用SSD硬盘可以显著提高图像加载速度"
+    - "关闭不必要的后台程序释放CPU资源"
+    - "批量处理时建议单次处理图片数量不超过50张"
+    - "对于大图片建议预先调整到合适尺寸"
+    - "定期清理系统缓存和临时文件"
+
+# 错误处理配置
+error_handling:
+  # 重试机制
+  max_retries: 2
+  retry_delay: 1.0
+  
+  # 错误恢复
+  continue_on_error: true
+  error_threshold: 0.3        # 错误率阈值
+  
+  # 错误报告
+  detailed_error_logging: true
+  error_report_file: "logs/errors_cpu.log"

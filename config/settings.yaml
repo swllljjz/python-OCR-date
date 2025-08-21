@@ -1,0 +1,205 @@
+# 商品包装日期识别系统配置文件
+
+# 应用基础配置
+app:
+  name: "商品包装生产日期识别系统"
+  version: "1.0.0"
+  debug: false
+  log_level: "INFO"
+
+# OCR引擎配置
+ocr:
+  # 引擎类型: paddleocr, easyocr, tesseract
+  engine: "paddleocr"
+  
+  # 语言设置: ch(中英文), en(英文), ch_sim(简体中文)
+  language: "ch"
+  
+  # GPU加速设置
+  use_gpu: false
+  gpu_mem: 500  # GPU内存限制(MB)
+  
+  # 识别参数
+  confidence_threshold: 0.8    # 置信度阈值(0.0-1.0)
+  use_angle_cls: true         # 启用文本方向检测
+  det_limit_side_len: 960     # 检测图像边长限制
+  det_limit_type: "max"       # 限制类型: max, min
+  
+  # 模型路径(可选，留空使用默认模型)
+  det_model_dir: null         # 检测模型路径
+  rec_model_dir: null         # 识别模型路径
+  cls_model_dir: null         # 方向分类模型路径
+
+# 图像处理配置
+image_processing:
+  # 图像尺寸限制
+  max_width: 1920
+  max_height: 1080
+  
+  # 图像增强
+  enhance_contrast: true      # 对比度增强
+  contrast_factor: 1.2        # 对比度因子
+  
+  # 降噪处理
+  denoise: true              # 启用降噪
+  denoise_strength: 3        # 降噪强度(1-10)
+  
+  # 自动旋转
+  auto_rotate: true          # 自动旋转校正
+  rotation_threshold: 5.0    # 旋转阈值(度)
+  
+  # 支持的图像格式
+  supported_formats:
+    - ".jpg"
+    - ".jpeg"
+    - ".png"
+    - ".bmp"
+    - ".tiff"
+    - ".webp"
+
+# 日期解析配置
+date_parsing:
+  # 支持的日期格式(正则表达式)
+  formats:
+    - pattern: '\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2}'
+      description: "YYYY.MM.DD, YYYY-MM-DD, YYYY/MM/DD"
+    - pattern: '\d{8}'
+      description: "YYYYMMDD"
+    - pattern: '\d{4}年\d{1,2}月\d{1,2}日'
+      description: "YYYY年MM月DD日"
+    - pattern: '\d{1,2}[.\-/]\d{1,2}[.\-/]\d{4}'
+      description: "DD.MM.YYYY, DD-MM-YYYY, DD/MM/YYYY"
+  
+  # 日期验证
+  year_range: [2000, 2050]    # 有效年份范围 (扩展以支持更多测试数据)
+  strict_validation: true     # 严格验证模式
+  
+  # 日期标准化
+  output_format: "YYYY-MM-DD" # 输出格式
+  
+  # 置信度权重
+  format_weights:
+    '\d{4}[.\-/]\d{1,2}[.\-/]\d{1,2}': 1.0
+    '\d{8}': 0.9
+    '\d{4}年\d{1,2}月\d{1,2}日': 0.95
+
+# 性能配置
+performance:
+  # 并行处理 - 降低并行度以避免OCR冲突
+  max_workers: 1             # 最大工作线程数 (改为1避免并行冲突)
+  batch_size: 5              # 批处理大小
+
+  # 超时设置 - 针对PaddleOCR优化
+  single_image_timeout: 45   # 单张图片处理超时(秒) - 动态调整
+  batch_timeout: 1200        # 批量处理超时(秒) - 增加批量处理时间
+  
+  # 缓存设置
+  cache_enabled: true        # 启用结果缓存
+  cache_size: 1000          # 缓存大小
+  cache_ttl: 3600           # 缓存生存时间(秒)
+  
+  # 内存管理
+  max_memory_usage: 2048     # 最大内存使用(MB)
+  gc_threshold: 100          # 垃圾回收阈值
+
+# 预警配置
+warning:
+  # 预警类型
+  no_date_found: true        # 未找到日期
+  invalid_date: true         # 无效日期
+  low_confidence: true       # 低置信度
+  processing_error: true     # 处理错误
+  
+  # 预警阈值
+  low_confidence_threshold: 0.6  # 低置信度阈值
+  
+  # 预警消息
+  messages:
+    no_date_found: "未在图像中识别到日期信息"
+    invalid_date: "识别到的日期格式无效或超出范围"
+    low_confidence: "识别置信度较低，建议人工确认"
+    processing_error: "图像处理过程中发生错误"
+
+# GUI配置
+gui:
+  # 窗口设置
+  window_title: "商品包装日期识别系统 V1.0"
+  window_size: [1200, 800]
+  resizable: true
+  
+  # 主题设置
+  theme: "default"           # 主题: default, dark, light
+  
+  # 字体设置
+  font_family: "Microsoft YaHei"
+  font_size: 10
+  
+  # 颜色设置
+  colors:
+    success: "#28a745"       # 成功颜色
+    warning: "#ffc107"       # 警告颜色
+    error: "#dc3545"         # 错误颜色
+    info: "#17a2b8"          # 信息颜色
+
+# 日志配置
+logging:
+  # 日志级别: DEBUG, INFO, WARNING, ERROR, CRITICAL
+  level: "INFO"
+  
+  # 日志文件
+  file_enabled: true
+  file_path: "logs/app.log"
+  max_file_size: "10MB"
+  backup_count: 5
+  
+  # 控制台输出
+  console_enabled: true
+  
+  # 日志格式
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  date_format: "%Y-%m-%d %H:%M:%S"
+
+# 报告配置
+report:
+  # 报告格式
+  formats: ["txt", "csv", "json"]
+  
+  # 报告内容
+  include_details: true      # 包含详细信息
+  include_images: false      # 包含图像(Base64)
+  include_raw_text: true     # 包含原始OCR文本
+  
+  # 输出路径
+  output_dir: "reports"
+  
+  # 文件命名
+  filename_template: "recognition_report_{timestamp}"
+
+# 开发配置
+development:
+  # 调试模式
+  debug_mode: false
+  
+  # 性能分析
+  profiling_enabled: false
+  
+  # 测试配置
+  test_data_dir: "test_image"
+  
+  # 模拟延迟(毫秒)
+  simulate_delay: 0
+
+# V2版本预留配置
+v2:
+  # 实时识别
+  realtime:
+    enabled: false
+    camera_id: 0
+    fps: 30
+    frame_skip: 5
+  
+  # 网络配置
+  network:
+    api_enabled: false
+    port: 8080
+    host: "localhost"
