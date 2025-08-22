@@ -13,6 +13,7 @@ import queue
 import tempfile
 import os
 from .smart_image_processor import SmartImageProcessor
+from .smart_roi_detector import SmartROIDetector
 
 class OptimizedPaddleOCREngine:
     """优化的PaddleOCR引擎 - 专注速度和准确率
@@ -27,8 +28,9 @@ class OptimizedPaddleOCREngine:
         """初始化优化的PaddleOCR引擎"""
         print("正在初始化增强版PaddleOCR引擎...")
 
-        # 初始化智能图像处理器
+        # 初始化智能图像处理器和ROI检测器
         self.image_processor = SmartImageProcessor()
+        self.roi_detector = SmartROIDetector()
 
         # 性能统计
         self.stats = {
@@ -36,6 +38,8 @@ class OptimizedPaddleOCREngine:
             'success_count': 0,
             'preprocessing_time': 0,
             'ocr_time': 0,
+            'roi_time': 0,
+            'roi_regions_detected': 0,
             'strategy_usage': {'standard': 0, 'enhanced': 0, 'aggressive': 0}
         }
 
@@ -148,6 +152,40 @@ class OptimizedPaddleOCREngine:
             print(f"预处理失败 ({strategy}策略): {e}")
             return image_path, False
 
+    def _process_with_roi_detection(self, image_path: str, use_roi: bool = True) -> Tuple[List[str], bool]:
+        """使用ROI检测优化处理速度
+
+        Args:
+            image_path: 输入图片路径
+            use_roi: 是否使用ROI检测
+
+        Returns:
+            (处理后图片路径列表, 是否使用了ROI)
+        """
+        if not use_roi:
+            return [image_path], False
+
+        try:
+            start_time = time.time()
+
+            # 检测文本区域
+            cropped_paths = self.roi_detector.crop_text_regions(image_path, padding=30)
+
+            roi_time = time.time() - start_time
+            self.stats['roi_time'] += roi_time
+
+            if len(cropped_paths) > 1:  # 检测到多个区域
+                self.stats['roi_regions_detected'] += len(cropped_paths)
+                print(f"ROI检测完成: 发现 {len(cropped_paths)} 个文本区域 (耗时: {roi_time:.2f}秒)")
+                return cropped_paths, True
+            else:
+                print(f"ROI检测: 未发现明显文本区域，使用原图 (耗时: {roi_time:.2f}秒)")
+                return [image_path], False
+
+        except Exception as e:
+            print(f"ROI检测失败: {e}")
+            return [image_path], False
+
     def _smart_resize_image(self, image_path: str) -> Tuple[str, Tuple[int, int]]:
         """智能缩放图片以提升处理速度"""
         try:
@@ -258,6 +296,91 @@ class OptimizedPaddleOCREngine:
         except Exception as e:
             print(f"OCR执行异常: {e}")
             return None
+
+    def _process_roi_regions(self, roi_paths: List[str], timeout_seconds: int,
+                           temp_files: List[str], start_time: float):
+        """处理ROI检测到的多个区域"""
+        all_results = []
+
+        for i, roi_path in enumerate(roi_paths):
+            print(f"处理ROI区域 {i+1}/{len(roi_paths)}: {roi_path}")
+
+            # 对每个ROI区域使用标准策略处理
+            processed_path, is_temp = self._process_with_smart_preprocessing(roi_path, "standard")
+            if is_temp:
+                temp_files.append(processed_path)
+
+            # 执行OCR
+            result = self._execute_ocr_with_timeout(processed_path, timeout_seconds)
+
+            if result and result[0]:
+                formatted_results = self._format_results(result)
+                if formatted_results:
+                    all_results.extend(formatted_results)
+                    print(f"✅ ROI区域 {i+1} 成功: 找到 {len(formatted_results)} 个文本")
+                else:
+                    print(f"❌ ROI区域 {i+1} 无有效文本")
+            else:
+                print(f"❌ ROI区域 {i+1} 识别失败")
+
+        if all_results:
+            processing_time = time.time() - start_time
+            self.stats['success_count'] += 1
+            print(f"✅ ROI处理成功: 总共找到 {len(all_results)} 个文本 (总耗时: {processing_time:.2f}秒)")
+            return [all_results]
+        else:
+            print("❌ 所有ROI区域都失败，尝试传统方法...")
+            # 回退到传统方法
+            return self._process_with_strategies(roi_paths[0], ["standard", "enhanced"],
+                                               timeout_seconds, temp_files, start_time)
+
+    def _process_with_strategies(self, image_path: str, strategies: List[str],
+                               timeout_seconds: int, temp_files: List[str], start_time: float):
+        """使用多策略处理单个图片"""
+        for i, strategy in enumerate(strategies):
+            strategy_start = time.time()
+
+            # 1. 智能预处理
+            processed_path, is_temp = self._process_with_smart_preprocessing(image_path, strategy)
+            if is_temp:
+                temp_files.append(processed_path)
+
+            # 2. 计算当前策略的超时时间
+            if strategy == "standard":
+                current_timeout = timeout_seconds
+            elif strategy == "enhanced":
+                current_timeout = int(timeout_seconds * 1.2)  # 增加20%
+            else:  # aggressive
+                current_timeout = int(timeout_seconds * 1.5)  # 增加50%
+
+            print(f"尝试{strategy}策略 (超时: {current_timeout}秒)...")
+
+            # 3. 执行OCR识别
+            result = self._execute_ocr_with_timeout(processed_path, current_timeout)
+
+            if result and result[0]:  # 识别成功
+                formatted_results = self._format_results(result)
+                if formatted_results:
+                    processing_time = time.time() - start_time
+                    strategy_time = time.time() - strategy_start
+
+                    self.stats['success_count'] += 1
+                    self.stats['ocr_time'] += strategy_time
+
+                    print(f"✅ {strategy}策略成功: 找到 {len(formatted_results)} 个文本 (策略耗时: {strategy_time:.2f}秒, 总耗时: {processing_time:.2f}秒)")
+                    return [formatted_results]
+
+            strategy_time = time.time() - strategy_start
+            print(f"❌ {strategy}策略失败 (耗时: {strategy_time:.2f}秒)")
+
+            # 如果不是最后一个策略，继续尝试
+            if i < len(strategies) - 1:
+                print(f"尝试下一个策略...")
+
+        # 所有策略都失败
+        processing_time = time.time() - start_time
+        print(f"❌ 所有策略都失败 (总耗时: {processing_time:.2f}秒)")
+        return [[]]
     
     def ocr(self, image, timeout_seconds=None):
         """增强版多策略OCR识别
@@ -290,51 +413,15 @@ class OptimizedPaddleOCREngine:
         print(f"开始多策略OCR识别 (基础超时: {timeout_seconds}秒)...")
 
         try:
-            # 尝试三种策略，逐级增强
-            for i, strategy in enumerate(strategies):
-                strategy_start = time.time()
+            # 首先尝试ROI检测优化
+            roi_paths, used_roi = self._process_with_roi_detection(image_path, use_roi=True)
 
-                # 1. 智能预处理
-                processed_path, is_temp = self._process_with_smart_preprocessing(image_path, strategy)
-                if is_temp:
-                    temp_files.append(processed_path)
-
-                # 2. 计算当前策略的超时时间
-                if strategy == "standard":
-                    current_timeout = timeout_seconds
-                elif strategy == "enhanced":
-                    current_timeout = int(timeout_seconds * 1.2)  # 增加20%
-                else:  # aggressive
-                    current_timeout = int(timeout_seconds * 1.5)  # 增加50%
-
-                print(f"尝试{strategy}策略 (超时: {current_timeout}秒)...")
-
-                # 3. 执行OCR识别
-                result = self._execute_ocr_with_timeout(processed_path, current_timeout)
-
-                if result and result[0]:  # 识别成功
-                    formatted_results = self._format_results(result)
-                    if formatted_results:
-                        processing_time = time.time() - start_time
-                        strategy_time = time.time() - strategy_start
-
-                        self.stats['success_count'] += 1
-                        self.stats['ocr_time'] += strategy_time
-
-                        print(f"✅ {strategy}策略成功: 找到 {len(formatted_results)} 个文本 (策略耗时: {strategy_time:.2f}秒, 总耗时: {processing_time:.2f}秒)")
-                        return [formatted_results]
-
-                strategy_time = time.time() - strategy_start
-                print(f"❌ {strategy}策略失败 (耗时: {strategy_time:.2f}秒)")
-
-                # 如果不是最后一个策略，继续尝试
-                if i < len(strategies) - 1:
-                    print(f"尝试下一个策略...")
-
-            # 所有策略都失败
-            processing_time = time.time() - start_time
-            print(f"❌ 所有策略都失败 (总耗时: {processing_time:.2f}秒)")
-            return [[]]
+            if used_roi and len(roi_paths) > 1:
+                # 使用ROI检测结果进行并行处理
+                return self._process_roi_regions(roi_paths, timeout_seconds, temp_files, start_time)
+            else:
+                # 使用传统的多策略处理
+                return self._process_with_strategies(image_path, strategies, timeout_seconds, temp_files, start_time)
             
             # 使用检测到的尺寸或原始尺寸
             final_size = detected_size if detected_size != (0, 0) else original_size
@@ -453,6 +540,9 @@ class OptimizedPaddleOCREngine:
             'success_rate': f"{(success/total*100):.1f}%" if total > 0 else "0%",
             'avg_preprocessing_time': f"{(self.stats['preprocessing_time']/total):.2f}s" if total > 0 else "0s",
             'avg_ocr_time': f"{(self.stats['ocr_time']/success):.2f}s" if success > 0 else "0s",
+            'avg_roi_time': f"{(self.stats['roi_time']/total):.2f}s" if total > 0 else "0s",
+            'roi_regions_detected': self.stats['roi_regions_detected'],
+            'avg_roi_regions': f"{(self.stats['roi_regions_detected']/total):.1f}" if total > 0 else "0",
             'strategy_usage': self.stats['strategy_usage'].copy()
         }
 
@@ -465,5 +555,7 @@ class OptimizedPaddleOCREngine:
             'success_count': 0,
             'preprocessing_time': 0,
             'ocr_time': 0,
+            'roi_time': 0,
+            'roi_regions_detected': 0,
             'strategy_usage': {'standard': 0, 'enhanced': 0, 'aggressive': 0}
         }
