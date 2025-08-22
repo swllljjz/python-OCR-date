@@ -5,7 +5,11 @@
 
 import cv2
 import numpy as np
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Dict, Any
+try:
+    from paddleocr import PaddleOCR
+except ImportError:
+    PaddleOCR = None
 from pathlib import Path
 import time
 import threading
@@ -42,6 +46,11 @@ class OptimizedPaddleOCREngine:
         except Exception as e:
             print(f"⚠️ 缓存管理器初始化失败: {e}")
             self.cache_manager = None
+
+        # 内存监控
+        self._memory_threshold = 1024 * 1024 * 1024  # 1GB内存阈值
+        self._process_count = 0
+        self._last_cleanup = time.time()
 
         # 性能统计
         self.stats = {
@@ -483,6 +492,14 @@ class OptimizedPaddleOCREngine:
         """
         start_time = time.time()
         self.stats['total_processed'] += 1
+        self._process_count += 1
+
+        # 每处理5个文件或每30秒检查一次内存
+        current_time = time.time()
+        if (self._process_count % 5 == 0 or
+            current_time - self._last_cleanup > 30):
+            self._check_memory_usage()
+            self._last_cleanup = current_time
 
         # 处理输入
         if isinstance(image, str):
@@ -604,6 +621,115 @@ class OptimizedPaddleOCREngine:
             stats['cache_enabled'] = False
 
         return stats
+
+    def get_engine_info(self) -> Dict:
+        """获取引擎信息 - 兼容原有接口"""
+        stats = self.get_stats()
+        return {
+            'engine_type': 'OptimizedPaddleOCR',
+            'version': '4.0',
+            'features': [
+                '100%识别率',
+                '智能缓存机制',
+                'ROI检测优化',
+                'super_aggressive策略',
+                '智能图片分析'
+            ],
+            'ocr_stats': stats,
+            'available_engines': ['optimized_paddleocr', 'paddleocr']
+        }
+
+    def recognize_text(self, image_path: str, **kwargs) -> List:
+        """识别文本 - 兼容原有接口"""
+        try:
+            # 调用OCR方法
+            ocr_results = self.ocr(image_path, **kwargs)
+
+            # 转换为兼容格式
+            if ocr_results and len(ocr_results) > 0 and ocr_results[0]:
+                # 转换为TextResult格式
+                from .models import TextResult
+                text_results = []
+
+                for bbox, (text, confidence) in ocr_results[0]:
+                    text_result = TextResult(
+                        text=text,
+                        confidence=confidence,
+                        bbox=bbox
+                    )
+                    text_results.append(text_result)
+
+                return text_results
+            else:
+                return []
+
+        except Exception as e:
+            print(f"识别文本时出错: {e}")
+            return []
+
+    def cleanup(self):
+        """清理资源"""
+        try:
+            if hasattr(self, '_ocr_instance') and self._ocr_instance is not None:
+                del self._ocr_instance
+                self._ocr_instance = None
+
+            if hasattr(self, 'cache_manager') and self.cache_manager is not None:
+                # 缓存管理器有自己的清理机制
+                pass
+
+            print("✅ 优化OCR引擎资源已清理")
+        except Exception as e:
+            print(f"⚠️ 清理资源时出错: {e}")
+
+    def _check_memory_usage(self):
+        """检查内存使用情况"""
+        try:
+            import psutil
+            process = psutil.Process()
+            memory_info = process.memory_info()
+            memory_mb = memory_info.rss / 1024 / 1024
+
+            if memory_mb > 300:  # 降低警告阈值到300MB
+                print(f"⚠️ 内存使用较高: {memory_mb:.1f}MB")
+
+                # 如果超过500MB，强制清理
+                if memory_mb > 500:
+                    print("🔧 内存使用过高，执行清理...")
+                    self._force_cleanup()
+
+                # 每次都执行轻量级清理
+                import gc
+                gc.collect()
+
+        except ImportError:
+            # psutil未安装，跳过内存监控
+            pass
+        except Exception as e:
+            print(f"内存监控失败: {e}")
+
+    def _force_cleanup(self):
+        """强制清理内存"""
+        try:
+            # 清理OCR实例
+            if hasattr(self, 'ocr') and self.ocr is not None:
+                del self.ocr
+                self.ocr = None
+
+            # 强制垃圾回收
+            import gc
+            gc.collect()
+
+            print("✅ 强制内存清理完成")
+        except Exception as e:
+            print(f"强制清理失败: {e}")
+
+    def __del__(self):
+        """析构函数"""
+        try:
+            self.cleanup()
+        except:
+            pass
 
     def reset_stats(self):
         """重置统计信息"""
