@@ -76,6 +76,8 @@ class SmartImageProcessor:
                 enhanced = self._standard_enhancement(gray)
             elif method == "aggressive":
                 enhanced = self._aggressive_enhancement(gray)
+            elif method == "super_aggressive":
+                enhanced = self._super_aggressive_enhancement(gray)
             elif method == "gentle":
                 enhanced = self._gentle_enhancement(gray)
             else:
@@ -127,7 +129,45 @@ class SmartImageProcessor:
         _, binary = cv2.threshold(sharpened, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
         
         return binary
-    
+
+    def _super_aggressive_enhancement(self, gray_img):
+        """超激进增强方法 - 用于极困难图片（如过暗、模糊的图片）"""
+        # 1. 亮度和对比度增强
+        # 使用gamma校正增加亮度
+        gamma = 1.5  # 增加亮度
+        lookup_table = np.array([((i / 255.0) ** (1.0 / gamma)) * 255 for i in np.arange(0, 256)]).astype("uint8")
+        brightened = cv2.LUT(gray_img, lookup_table)
+
+        # 2. 强对比度增强
+        clahe = cv2.createCLAHE(clipLimit=6.0, tileGridSize=(4,4))
+        enhanced = clahe.apply(brightened)
+
+        # 3. 多级锐化
+        # 第一级锐化
+        kernel1 = np.array([[-1,-1,-1], [-1,9,-1], [-1,-1,-1]])
+        sharpened1 = cv2.filter2D(enhanced, -1, kernel1)
+
+        # 第二级锐化（更强）
+        kernel2 = np.array([[0,-1,0], [-1,5,-1], [0,-1,0]])
+        sharpened2 = cv2.filter2D(sharpened1, -1, kernel2)
+
+        # 4. 边缘增强
+        # 使用拉普拉斯算子增强边缘
+        laplacian = cv2.Laplacian(sharpened2, cv2.CV_64F)
+        laplacian = np.uint8(np.absolute(laplacian))
+        enhanced_edges = cv2.addWeighted(sharpened2, 0.8, laplacian, 0.2, 0)
+
+        # 5. 降噪（在增强后进行）
+        denoised = cv2.bilateralFilter(enhanced_edges, 9, 75, 75)
+
+        # 6. 自适应二值化
+        binary = cv2.adaptiveThreshold(
+            denoised, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY, 7, 2
+        )
+
+        return binary
+
     def _gentle_enhancement(self, gray_img):
         """温和增强方法 - 用于质量较好的图片"""
         # 轻微对比度增强
