@@ -152,6 +152,39 @@ class OptimizedPaddleOCREngine:
             print(f"预处理失败 ({strategy}策略): {e}")
             return image_path, False
 
+    def _should_use_roi(self, image_path: str) -> bool:
+        """判断是否应该使用ROI检测"""
+        try:
+            img = cv2.imread(image_path)
+            if img is None:
+                return False
+
+            height, width = img.shape[:2]
+            pixels = width * height
+
+            # 小图片跳过ROI检测
+            if pixels < 250000:  # 小于500x500像素
+                print(f"图片较小 ({width}x{height})，跳过ROI检测")
+                return False
+
+            # 超大图片使用ROI检测
+            if pixels > 1000000:  # 大于1000x1000像素
+                print(f"图片较大 ({width}x{height})，使用ROI检测")
+                return True
+
+            # 中等图片根据宽高比判断
+            aspect_ratio = max(width, height) / min(width, height)
+            if aspect_ratio > 3:  # 长条形图片，可能有多个文本区域
+                print(f"图片为长条形 ({width}x{height})，使用ROI检测")
+                return True
+
+            print(f"图片中等大小 ({width}x{height})，跳过ROI检测")
+            return False
+
+        except Exception as e:
+            print(f"判断ROI使用失败: {e}")
+            return False
+
     def _process_with_roi_detection(self, image_path: str, use_roi: bool = True) -> Tuple[List[str], bool]:
         """使用ROI检测优化处理速度
 
@@ -162,7 +195,8 @@ class OptimizedPaddleOCREngine:
         Returns:
             (处理后图片路径列表, 是否使用了ROI)
         """
-        if not use_roi:
+        # 智能判断是否使用ROI
+        if not use_roi or not self._should_use_roi(image_path):
             return [image_path], False
 
         try:
@@ -174,12 +208,19 @@ class OptimizedPaddleOCREngine:
             roi_time = time.time() - start_time
             self.stats['roi_time'] += roi_time
 
-            if len(cropped_paths) > 1:  # 检测到多个区域
-                self.stats['roi_regions_detected'] += len(cropped_paths)
-                print(f"ROI检测完成: 发现 {len(cropped_paths)} 个文本区域 (耗时: {roi_time:.2f}秒)")
-                return cropped_paths, True
+            # 检查ROI检测效果
+            if len(cropped_paths) > 1 and len(cropped_paths) <= 15:  # 合理的区域数量
+                # 预估处理时间
+                estimated_time = len(cropped_paths) * 8  # 每个区域预估8秒
+                if estimated_time <= 60:  # 预估时间不超过60秒
+                    self.stats['roi_regions_detected'] += len(cropped_paths)
+                    print(f"ROI检测完成: 发现 {len(cropped_paths)} 个文本区域 (耗时: {roi_time:.2f}秒, 预估处理: {estimated_time}秒)")
+                    return cropped_paths, True
+                else:
+                    print(f"ROI检测: 区域过多({len(cropped_paths)}个)，预估时间过长({estimated_time}秒)，使用原图")
+                    return [image_path], False
             else:
-                print(f"ROI检测: 未发现明显文本区域，使用原图 (耗时: {roi_time:.2f}秒)")
+                print(f"ROI检测: 区域数量不合适({len(cropped_paths)}个)，使用原图 (耗时: {roi_time:.2f}秒)")
                 return [image_path], False
 
         except Exception as e:

@@ -14,10 +14,12 @@ class SmartROIDetector:
     
     def __init__(self):
         """初始化ROI检测器"""
-        self.min_text_area = 100      # 最小文本区域面积
-        self.max_text_area = 50000    # 最大文本区域面积
+        self.min_text_area = 5000     # 最小文本区域面积（提高到5000）
+        self.max_text_area = 100000   # 最大文本区域面积
         self.min_aspect_ratio = 0.1   # 最小宽高比
         self.max_aspect_ratio = 10.0  # 最大宽高比
+        self.max_regions = 10         # 最大处理区域数量
+        self.min_region_size = 50     # 最小区域尺寸（宽或高）
         
     def detect_text_regions(self, image_path: str) -> List[Tuple[int, int, int, int]]:
         """检测图片中的文本区域
@@ -50,9 +52,13 @@ class SmartROIDetector:
             
             # 合并和过滤区域
             filtered_regions = self._filter_and_merge_regions(regions, img.shape[:2])
-            
-            print(f"检测到 {len(filtered_regions)} 个文本区域")
-            return filtered_regions
+
+            # 按重要性排序并限制数量
+            sorted_regions = self._sort_regions_by_importance(filtered_regions, img.shape[:2])
+            final_regions = sorted_regions[:self.max_regions]
+
+            print(f"检测到 {len(regions)} 个原始区域，过滤后 {len(filtered_regions)} 个，最终选择 {len(final_regions)} 个")
+            return final_regions
             
         except Exception as e:
             print(f"文本区域检测失败: {e}")
@@ -61,13 +67,22 @@ class SmartROIDetector:
     def _detect_with_mser(self, gray_img) -> List[Tuple[int, int, int, int]]:
         """使用MSER算法检测文本区域"""
         try:
-            # 创建MSER检测器
-            mser = cv2.MSER_create(
-                _min_area=self.min_text_area,
-                _max_area=self.max_text_area,
-                _max_variation=0.25,
-                _min_diversity=0.2
-            )
+            # 创建MSER检测器 - 修复参数兼容性问题
+            try:
+                # 尝试新版本OpenCV参数
+                mser = cv2.MSER_create()
+                mser.setMinArea(self.min_text_area)
+                mser.setMaxArea(self.max_text_area)
+                mser.setMaxVariation(0.25)
+                mser.setMinDiversity(0.2)
+            except AttributeError:
+                # 回退到旧版本参数
+                mser = cv2.MSER_create(
+                    min_area=self.min_text_area,
+                    max_area=self.max_text_area,
+                    max_variation=0.25,
+                    min_diversity=0.2
+                )
             
             # 检测区域
             regions, _ = mser.detectRegions(gray_img)
@@ -146,9 +161,13 @@ class SmartROIDetector:
     
     def _is_valid_text_region(self, width: int, height: int) -> bool:
         """判断是否为有效的文本区域"""
+        # 基本尺寸检查
+        if width < self.min_region_size or height < self.min_region_size:
+            return False
+
         area = width * height
         aspect_ratio = width / height if height > 0 else 0
-        
+
         return (self.min_text_area <= area <= self.max_text_area and
                 self.min_aspect_ratio <= aspect_ratio <= self.max_aspect_ratio)
     
@@ -225,7 +244,41 @@ class SmartROIDetector:
         max_y = max(y1 + h1, y2 + h2)
         
         return (min_x, min_y, max_x - min_x, max_y - min_y)
-    
+
+    def _sort_regions_by_importance(self, regions: List[Tuple[int, int, int, int]],
+                                   image_shape: Tuple[int, int]) -> List[Tuple[int, int, int, int]]:
+        """按重要性排序区域"""
+        if not regions:
+            return []
+
+        height, width = image_shape
+        center_x, center_y = width // 2, height // 2
+
+        def calculate_importance(region):
+            x, y, w, h = region
+            area = w * h
+
+            # 计算区域中心点
+            region_center_x = x + w // 2
+            region_center_y = y + h // 2
+
+            # 距离图片中心的距离（越近越重要）
+            distance_to_center = ((region_center_x - center_x) ** 2 + (region_center_y - center_y) ** 2) ** 0.5
+            max_distance = (width ** 2 + height ** 2) ** 0.5
+            center_score = 1 - (distance_to_center / max_distance)
+
+            # 面积分数（越大越重要）
+            max_area = width * height
+            area_score = area / max_area
+
+            # 综合重要性分数
+            importance = area_score * 0.7 + center_score * 0.3
+            return importance
+
+        # 按重要性降序排序
+        sorted_regions = sorted(regions, key=calculate_importance, reverse=True)
+        return sorted_regions
+
     def crop_text_regions(self, image_path: str, padding: int = 20) -> List[str]:
         """裁剪文本区域并保存为临时文件"""
         try:
