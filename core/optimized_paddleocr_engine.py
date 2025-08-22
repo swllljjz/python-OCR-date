@@ -14,6 +14,7 @@ import tempfile
 import os
 from .smart_image_processor import SmartImageProcessor
 from .smart_roi_detector import SmartROIDetector
+from .cache_manager import CacheManager
 
 class OptimizedPaddleOCREngine:
     """优化的PaddleOCR引擎 - 专注速度和准确率
@@ -31,6 +32,14 @@ class OptimizedPaddleOCREngine:
         # 初始化智能图像处理器和ROI检测器
         self.image_processor = SmartImageProcessor()
         self.roi_detector = SmartROIDetector()
+
+        # 初始化缓存管理器
+        try:
+            self.cache_manager = CacheManager()
+            print("✅ 缓存管理器已启用")
+        except Exception as e:
+            print(f"⚠️ 缓存管理器初始化失败: {e}")
+            self.cache_manager = None
 
         # 性能统计
         self.stats = {
@@ -443,6 +452,14 @@ class OptimizedPaddleOCREngine:
             os.close(temp_fd)
             cv2.imwrite(image_path, image)
 
+        # 检查缓存
+        if self.cache_manager and isinstance(image, str):  # 只对文件路径启用缓存
+            cached_result = self.cache_manager.get_cached_result(image_path)
+            if cached_result:
+                processing_time = time.time() - start_time
+                print(f"⚡ 缓存命中，跳过OCR处理 (缓存查询耗时: {processing_time:.3f}秒)")
+                return cached_result['ocr_results']
+
         # 动态计算基础超时时间
         base_timeout = self._calculate_dynamic_timeout(image_path)
         if timeout_seconds is None:
@@ -459,74 +476,18 @@ class OptimizedPaddleOCREngine:
 
             if used_roi and len(roi_paths) > 1:
                 # 使用ROI检测结果进行并行处理
-                return self._process_roi_regions(roi_paths, timeout_seconds, temp_files, start_time)
+                result = self._process_roi_regions(roi_paths, timeout_seconds, temp_files, start_time)
             else:
                 # 使用传统的多策略处理
-                return self._process_with_strategies(image_path, strategies, timeout_seconds, temp_files, start_time)
-            
-            # 使用检测到的尺寸或原始尺寸
-            final_size = detected_size if detected_size != (0, 0) else original_size
-            
-            # 2. 动态计算超时时间
-            if timeout_seconds is None:
-                timeout_seconds = self._calculate_dynamic_timeout(final_size)
-            
-            print(f"开始优化OCR识别 (图片尺寸: {final_size[0]}x{final_size[1]}, 超时: {timeout_seconds}秒)...")
-            
-            # 3. 第一次尝试：使用缩放后的图片
-            result_queue = queue.Queue()
-            worker_thread = threading.Thread(
-                target=self._ocr_worker, 
-                args=(resized_path, result_queue)
-            )
-            worker_thread.daemon = True
-            worker_thread.start()
-            
-            try:
-                status, results = result_queue.get(timeout=timeout_seconds)
-                
-                if status == 'success' and results and results[0]:
-                    # 成功识别
-                    formatted_results = self._format_results(results)
-                    if formatted_results:
-                        processing_time = time.time() - start_time
-                        print(f"快速OCR识别成功: 找到 {len(formatted_results)} 个文本区域 (耗时: {processing_time:.2f}秒)")
-                        return [formatted_results]
-                
-            except queue.Empty:
-                print(f"第一次OCR识别超时，尝试图片增强...")
-            
-            # 4. 第二次尝试：图片增强
-            enhanced_path = self._enhance_image_for_ocr(resized_path)
-            if enhanced_path != resized_path:
-                temp_files.append(enhanced_path)
-            
-            result_queue = queue.Queue()
-            worker_thread = threading.Thread(
-                target=self._ocr_worker, 
-                args=(enhanced_path, result_queue)
-            )
-            worker_thread.daemon = True
-            worker_thread.start()
-            
-            try:
-                status, results = result_queue.get(timeout=timeout_seconds // 2)
-                
-                if status == 'success':
-                    formatted_results = self._format_results(results)
-                    processing_time = time.time() - start_time
-                    
-                    if formatted_results:
-                        print(f"增强OCR识别成功: 找到 {len(formatted_results)} 个文本区域 (耗时: {processing_time:.2f}秒)")
-                        return [formatted_results]
-                    else:
-                        print(f"增强OCR未识别到有效文本 (耗时: {processing_time:.2f}秒)")
-                        return [[]]
-                        
-            except queue.Empty:
+                result = self._process_with_strategies(image_path, strategies, timeout_seconds, temp_files, start_time)
+
+            # 保存成功结果到缓存
+            if result and result[0] and self.cache_manager and isinstance(image, str):
                 processing_time = time.time() - start_time
-                print(f"增强OCR识别也超时 (耗时: {processing_time:.2f}秒)")
-                return [[]]
+                strategy_used = "roi" if used_roi else "traditional"
+                self.cache_manager.save_result(image_path, result, processing_time, strategy_used)
+
+            return result
             
         finally:
             # 清理临时文件
@@ -586,6 +547,20 @@ class OptimizedPaddleOCREngine:
             'avg_roi_regions': f"{(self.stats['roi_regions_detected']/total):.1f}" if total > 0 else "0",
             'strategy_usage': self.stats['strategy_usage'].copy()
         }
+
+        # 添加缓存统计
+        if self.cache_manager:
+            cache_stats = self.cache_manager.get_cache_stats()
+            stats.update({
+                'cache_enabled': True,
+                'cache_hit_rate': cache_stats['hit_rate'],
+                'cache_total_requests': cache_stats['total_requests'],
+                'cache_hits': cache_stats['cache_hits'],
+                'cache_count': cache_stats['cache_count'],
+                'cache_size': cache_stats['cache_size_mb']
+            })
+        else:
+            stats['cache_enabled'] = False
 
         return stats
 
