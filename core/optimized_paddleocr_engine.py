@@ -345,14 +345,38 @@ class OptimizedPaddleOCREngine:
     def _ocr_worker(self, image_path: str, result_queue: queue.Queue):
         """OCR工作线程"""
         try:
-            results = self.reader.predict(image_path)
+            # 检查OCR实例是否可用
+            if not hasattr(self, 'reader') or self.reader is None:
+                result_queue.put(('error', 'OCR实例未初始化'))
+                return
+
+            # 检查OCR实例是否有ocr方法
+            if not hasattr(self.reader, 'ocr'):
+                result_queue.put(('error', 'OCR实例缺少ocr方法'))
+                return
+
+            print(f"   📷 执行PaddleOCR识别...")
+            # 正确的PaddleOCR调用方式
+            results = self.reader.ocr(image_path)
+            print(f"   ✅ PaddleOCR识别完成")
             result_queue.put(('success', results))
+
         except Exception as e:
-            result_queue.put(('error', str(e)))
+            import traceback
+            error_msg = f"OCR工作线程异常: {e}\n{traceback.format_exc()}"
+            print(f"   ❌ {error_msg}")
+            result_queue.put(('error', error_msg))
 
     def _execute_ocr_with_timeout(self, image_path: str, timeout_seconds: int):
         """执行带超时的OCR识别"""
         try:
+            # 检查图片文件
+            if not os.path.exists(image_path):
+                print(f"❌ 图片文件不存在: {image_path}")
+                return None
+
+            print(f"🚀 开始OCR识别: {os.path.basename(image_path)} (超时: {timeout_seconds}秒)")
+
             result_queue = queue.Queue()
             worker_thread = threading.Thread(
                 target=self._ocr_worker,
@@ -362,20 +386,26 @@ class OptimizedPaddleOCREngine:
             worker_thread.start()
 
             try:
+                print(f"   ⏳ 等待OCR结果...")
                 status, results = result_queue.get(timeout=timeout_seconds)
 
                 if status == 'success':
+                    print(f"   🎉 OCR识别成功")
                     return results
                 else:
-                    print(f"OCR执行错误: {results}")
+                    print(f"   ❌ OCR执行错误: {results}")
                     return None
 
             except queue.Empty:
-                print(f"OCR执行超时 ({timeout_seconds}秒)")
+                print(f"   ⏰ OCR执行超时 ({timeout_seconds}秒)")
+                if worker_thread.is_alive():
+                    print(f"   ⚠️ 工作线程仍在运行")
                 return None
 
         except Exception as e:
-            print(f"OCR执行异常: {e}")
+            import traceback
+            print(f"❌ OCR执行异常: {e}")
+            print(f"详细错误:\n{traceback.format_exc()}")
             return None
 
     def _process_roi_regions(self, roi_paths: List[str], timeout_seconds: int,
@@ -494,12 +524,18 @@ class OptimizedPaddleOCREngine:
         self.stats['total_processed'] += 1
         self._process_count += 1
 
-        # 每处理5个文件或每30秒检查一次内存
+        # 每处理10个文件或每60秒检查一次内存（减少检查频率）
         current_time = time.time()
-        if (self._process_count % 5 == 0 or
-            current_time - self._last_cleanup > 30):
+        if (self._process_count % 10 == 0 or
+            current_time - self._last_cleanup > 60):
             self._check_memory_usage()
             self._last_cleanup = current_time
+
+        # 如果处理文件过多，强制清理
+        if self._process_count > 100:
+            print("🔧 处理文件过多，执行强制清理...")
+            self._force_cleanup()
+            self._process_count = 0
 
         # 处理输入
         if isinstance(image, str):
@@ -690,17 +726,18 @@ class OptimizedPaddleOCREngine:
             memory_info = process.memory_info()
             memory_mb = memory_info.rss / 1024 / 1024
 
-            if memory_mb > 300:  # 降低警告阈值到300MB
+            if memory_mb > 800:  # 提高警告阈值到800MB
                 print(f"⚠️ 内存使用较高: {memory_mb:.1f}MB")
 
-                # 如果超过500MB，强制清理
-                if memory_mb > 500:
+                # 如果超过1200MB，强制清理
+                if memory_mb > 1200:
                     print("🔧 内存使用过高，执行清理...")
                     self._force_cleanup()
 
-                # 每次都执行轻量级清理
-                import gc
-                gc.collect()
+                # 只在内存真的很高时才执行轻量级清理
+                elif memory_mb > 1000:
+                    import gc
+                    gc.collect()
 
         except ImportError:
             # psutil未安装，跳过内存监控
@@ -712,15 +749,31 @@ class OptimizedPaddleOCREngine:
         """强制清理内存"""
         try:
             # 清理OCR实例
-            if hasattr(self, 'ocr') and self.ocr is not None:
-                del self.ocr
-                self.ocr = None
+            if hasattr(self, 'reader') and self.reader is not None:
+                print("🔧 清理PaddleOCR实例...")
+                del self.reader
+                self.reader = None
 
             # 强制垃圾回收
             import gc
-            gc.collect()
+            collected = gc.collect()
 
-            print("✅ 强制内存清理完成")
+            print(f"✅ 强制内存清理完成 (回收 {collected} 个对象)")
+
+            # 重新初始化OCR实例
+            try:
+                from paddleocr import PaddleOCR
+                self.reader = PaddleOCR(
+                    use_angle_cls=True,
+                    lang='ch',
+                    show_log=False  # 减少日志输出
+                )
+                print("✅ PaddleOCR实例重新初始化完成")
+            except Exception as e:
+                print(f"⚠️ PaddleOCR重新初始化失败: {e}")
+                # 如果重新初始化失败，设置为None避免后续调用错误
+                self.reader = None
+
         except Exception as e:
             print(f"强制清理失败: {e}")
 
