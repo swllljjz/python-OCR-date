@@ -356,9 +356,18 @@ class OptimizedPaddleOCREngine:
                 return
 
             print(f"   📷 执行PaddleOCR识别...")
-            # 正确的PaddleOCR调用方式
-            results = self.reader.ocr(image_path)
-            print(f"   ✅ PaddleOCR识别完成")
+            # 使用新版PaddleOCR的predict方法
+            try:
+                # 优先使用predict方法（新版本）
+                if hasattr(self.reader, 'predict'):
+                    results = self.reader.predict(image_path)
+                else:
+                    # 回退到ocr方法（旧版本）
+                    results = self.reader.ocr(image_path)
+                print(f"   ✅ PaddleOCR识别完成")
+            except Exception as e:
+                print(f"   ❌ PaddleOCR调用失败: {e}")
+                raise
             result_queue.put(('success', results))
 
         except Exception as e:
@@ -601,28 +610,59 @@ class OptimizedPaddleOCREngine:
     def _format_results(self, results):
         """格式化OCR结果"""
         formatted_results = []
-        if results and len(results) > 0:
-            ocr_result = results[0]
-            
-            if isinstance(ocr_result, dict) and 'rec_texts' in ocr_result:
-                texts = ocr_result['rec_texts']
-                scores = ocr_result.get('rec_scores', [])
-                polys = ocr_result.get('rec_polys', [])
-                
-                for i in range(len(texts)):
-                    try:
-                        text = str(texts[i]).strip()
-                        confidence = float(scores[i]) if i < len(scores) else 0.5
-                        
-                        # 降低置信度阈值以提高召回率
-                        if confidence > 0.2 and len(text) > 0:
-                            bbox = polys[i] if i < len(polys) else [[0,0],[0,0],[0,0],[0,0]]
-                            if hasattr(bbox, 'tolist'):
-                                bbox = bbox.tolist()
-                            formatted_results.append([bbox, (text, confidence)])
-                    except Exception as e:
-                        continue
-        
+
+        try:
+            if results and len(results) > 0:
+                # 处理PaddleOCR的标准返回格式
+                if isinstance(results[0], list):
+                    # 标准PaddleOCR格式: [[[bbox], (text, confidence)], ...]
+                    for line in results[0]:
+                        try:
+                            if len(line) >= 2:
+                                bbox = line[0]
+                                text_info = line[1]
+
+                                if isinstance(text_info, (list, tuple)) and len(text_info) >= 2:
+                                    text = str(text_info[0]).strip()
+                                    confidence = float(text_info[1])
+
+                                    # 降低置信度阈值以提高召回率
+                                    if confidence > 0.2 and len(text) > 0:
+                                        if hasattr(bbox, 'tolist'):
+                                            bbox = bbox.tolist()
+                                        formatted_results.append([bbox, (text, confidence)])
+                        except Exception as e:
+                            print(f"   ⚠️ 格式化单行结果失败: {e}")
+                            continue
+
+                # 处理其他可能的格式
+                elif isinstance(results[0], dict) and 'rec_texts' in results[0]:
+                    ocr_result = results[0]
+                    texts = ocr_result['rec_texts']
+                    scores = ocr_result.get('rec_scores', [])
+                    polys = ocr_result.get('rec_polys', [])
+
+                    for i in range(len(texts)):
+                        try:
+                            text = str(texts[i]).strip()
+                            confidence = float(scores[i]) if i < len(scores) else 0.5
+
+                            if confidence > 0.2 and len(text) > 0:
+                                bbox = polys[i] if i < len(polys) else [[0,0],[0,0],[0,0],[0,0]]
+                                if hasattr(bbox, 'tolist'):
+                                    bbox = bbox.tolist()
+                                formatted_results.append([bbox, (text, confidence)])
+                        except Exception as e:
+                            continue
+
+                else:
+                    print(f"   ⚠️ 未知的结果格式: {type(results[0])}")
+
+        except Exception as e:
+            print(f"   ❌ 结果格式化失败: {e}")
+            import traceback
+            traceback.print_exc()
+
         return formatted_results
 
     def get_stats(self):
