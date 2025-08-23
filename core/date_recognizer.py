@@ -75,13 +75,14 @@ class DateRecognizer:
         try:
             logger.info(f"开始识别图片: {image_path}")
             
-            # 1. 加载和预处理图像
+            # 1. 加载图像信息（但不预处理）
             image = self.image_processor.load_image(image_path)
             image_info = self.image_processor.get_image_info(image)
-            processed_image = self.image_processor.preprocess_image(image)
-            
-            # 2. OCR文本识别
-            text_results = self.ocr_engine.recognize_text(processed_image)
+
+            # 2. OCR文本识别（直接使用原始图像路径）
+            # 注意：优化OCR引擎内部已经有完善的预处理策略，
+            # 不需要额外的预处理，避免破坏图像质量
+            text_results = self.ocr_engine.recognize_text(image_path)
             
             # 3. 日期解析
             date_infos = self.date_parser.parse_dates_from_text(text_results)

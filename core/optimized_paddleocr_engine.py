@@ -715,11 +715,38 @@ class OptimizedPaddleOCREngine:
             'available_engines': ['optimized_paddleocr', 'paddleocr']
         }
 
-    def recognize_text(self, image_path: str, **kwargs) -> List:
-        """识别文本 - 兼容原有接口"""
+    def recognize_text(self, image_input, **kwargs) -> List:
+        """识别文本 - 兼容原有接口
+
+        Args:
+            image_input: 可以是图像路径(str)或图像数据(numpy.ndarray)
+        """
         try:
-            # 调用OCR方法
-            ocr_results = self.ocr(image_path, **kwargs)
+            # 处理不同类型的输入
+            if isinstance(image_input, str):
+                # 字符串路径，直接调用OCR方法
+                ocr_results = self.ocr(image_input, **kwargs)
+            else:
+                # 图像数据，需要保存为临时文件
+                import tempfile
+                import cv2
+
+                with tempfile.NamedTemporaryFile(suffix='.jpg', delete=False) as temp_file:
+                    temp_path = temp_file.name
+
+                try:
+                    # 保存图像数据到临时文件
+                    cv2.imwrite(temp_path, image_input)
+
+                    # 调用OCR方法
+                    ocr_results = self.ocr(temp_path, **kwargs)
+
+                finally:
+                    # 清理临时文件
+                    try:
+                        os.unlink(temp_path)
+                    except:
+                        pass
 
             # 转换为兼容格式
             if ocr_results and len(ocr_results) > 0 and ocr_results[0]:
@@ -741,6 +768,8 @@ class OptimizedPaddleOCREngine:
 
         except Exception as e:
             print(f"识别文本时出错: {e}")
+            import traceback
+            traceback.print_exc()
             return []
 
     def cleanup(self):
